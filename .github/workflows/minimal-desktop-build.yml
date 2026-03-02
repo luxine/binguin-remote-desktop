@@ -132,16 +132,16 @@ jobs:
         run: |
           pip3 install -r .\libs\portable\requirements.txt
           python3 .\libs\portable\generate.py -f .\flutter\build\windows\x64\runner\Release -o .\libs\portable -e .\flutter\build\windows\x64\runner\Release\rustdesk.exe
-          Move-Item -Force .\target\release\rustdesk-portable-packer.exe .\rustdesk-install.exe
+          Move-Item -Force .\target\release\rustdesk-portable-packer.exe .\BinguinDesk-install.exe
 
       - name: Upload Windows package
         uses: actions/upload-artifact@v4
         with:
-          name: rustdesk-windows-installer-x64
+          name: binguindesk-windows-installer-x64
           retention-days: 14
           if-no-files-found: error
           path: |
-            rustdesk-install.exe
+            BinguinDesk-install.exe
 
   build-ubuntu-x64:
     name: Build Ubuntu x64
@@ -243,11 +243,18 @@ jobs:
         run: |
           python3 ./build.py --flutter --hwcodec --unix-file-copy-paste
 
+      - name: Rename Ubuntu package
+        shell: bash
+        run: |
+          for package in rustdesk-*.deb; do
+            mv "$package" "BinguinDesk-${package#rustdesk-}"
+          done
+
       - name: Upload Ubuntu package
         uses: actions/upload-artifact@v4
         with:
-          name: rustdesk-ubuntu-deb-x64
+          name: binguindesk-ubuntu-deb-x64
           retention-days: 14
           if-no-files-found: error
           path: |
-            rustdesk-*.deb
+            BinguinDesk-*.deb
