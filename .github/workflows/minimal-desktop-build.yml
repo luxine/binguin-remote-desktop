@@ -118,14 +118,30 @@ jobs:
           name: topmostwindow-artifacts
           path: ./flutter/build/windows/x64/runner/Release
 
-      - name: Upload Windows artifact
+      - name: Copy Runner.res
+        shell: bash
+        continue-on-error: true
+        run: |
+          runner_res=$(find . -name "Runner.res" | head -n 1)
+          if [ -n "$runner_res" ]; then
+            cp "$runner_res" ./libs/portable/Runner.res
+          fi
+
+      - name: Build Windows installer
+        shell: pwsh
+        run: |
+          pip3 install -r .\libs\portable\requirements.txt
+          python3 .\libs\portable\generate.py -f .\flutter\build\windows\x64\runner\Release -o .\libs\portable -e .\flutter\build\windows\x64\runner\Release\rustdesk.exe
+          Move-Item -Force .\target\release\rustdesk-portable-packer.exe .\rustdesk-install.exe
+
+      - name: Upload Windows package
         uses: actions/upload-artifact@v4
         with:
-          name: rustdesk-windows-x64
+          name: rustdesk-windows-installer-x64
           retention-days: 14
           if-no-files-found: error
           path: |
-            flutter/build/windows/x64/runner/Release/**
+            rustdesk-install.exe
 
   build-ubuntu-x64:
     name: Build Ubuntu x64
@@ -227,12 +243,11 @@ jobs:
         run: |
           python3 ./build.py --flutter --hwcodec --unix-file-copy-paste
 
-      - name: Upload Ubuntu artifact
+      - name: Upload Ubuntu package
         uses: actions/upload-artifact@v4
         with:
-          name: rustdesk-ubuntu-x64
+          name: rustdesk-ubuntu-deb-x64
           retention-days: 14
           if-no-files-found: error
           path: |
-            flutter/build/linux/x64/release/bundle/**
             rustdesk-*.deb
