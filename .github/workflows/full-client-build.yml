@@ -1,0 +1,506 @@
+name: Full Client Build
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  SCITER_RUST_VERSION: "1.75"
+  RUST_VERSION: "1.75"
+  MAC_RUST_VERSION: "1.81"
+  CARGO_NDK_VERSION: "3.1.2"
+  LLVM_VERSION: "15.0.6"
+  FLUTTER_VERSION: "3.24.5"
+  ANDROID_FLUTTER_VERSION: "3.24.5"
+  VCPKG_COMMIT_ID: "120deac3062162151622ca4860575a33844ba10b"
+  NDK_VERSION: "r27c"
+
+jobs:
+  generate-bridge:
+    uses: ./.github/workflows/bridge.yml
+
+  build-topmost-window:
+    uses: ./.github/workflows/third-party-RustDeskTempTopMostWindow.yml
+    with:
+      upload-artifact: true
+      target: windows-2022
+      configuration: Release
+      platform: x64
+      target_version: Windows10
+
+  build-windows-x64:
+    name: Build Windows x64
+    needs:
+      - generate-bridge
+      - build-topmost-window
+    runs-on: windows-2022
+    timeout-minutes: 120
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Restore generated bridge files
+        uses: actions/download-artifact@v4
+        with:
+          name: bridge-artifact
+          path: ./
+
+      - name: Install LLVM and Clang
+        uses: KyleMayes/install-llvm-action@v1
+        with:
+          version: ${{ env.LLVM_VERSION }}
+
+      - name: Install Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+
+      - name: Replace Flutter engine with RustDesk build
+        shell: pwsh
+        run: |
+          flutter doctor -v
+          flutter precache --windows
+          Invoke-WebRequest -Uri https://github.com/rustdesk/engine/releases/download/main/windows-x64-release.zip -OutFile windows-x64-release.zip
+          Expand-Archive -Path windows-x64-release.zip -DestinationPath windows-x64-release
+          $engineDir = "C:/hostedtoolcache/windows/flutter/stable-${{ env.FLUTTER_VERSION }}-x64/bin/cache/artifacts/engine/windows-x64-release"
+          New-Item -ItemType Directory -Force -Path $engineDir | Out-Null
+          Move-Item -Force windows-x64-release/* $engineDir
+
+      - name: Patch Flutter SDK
+        shell: bash
+        run: |
+          FLUTTER_ROOT="$(dirname "$(dirname "$(which flutter)")")"
+          cp .github/patches/flutter_3.24.4_dropdown_menu_enableFilter.diff "$FLUTTER_ROOT"
+          pushd "$FLUTTER_ROOT"
+          git apply flutter_3.24.4_dropdown_menu_enableFilter.diff
+          popd
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: ${{ env.SCITER_RUST_VERSION }}
+          targets: x86_64-pc-windows-msvc
+          components: rustfmt
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: full-client-windows
+
+      - name: Setup vcpkg
+        uses: lukka/run-vcpkg@v11
+        with:
+          vcpkgDirectory: C:\vcpkg
+          vcpkgGitCommitId: ${{ env.VCPKG_COMMIT_ID }}
+          doNotCache: true
+
+      - name: Install vcpkg dependencies
+        shell: bash
+        env:
+          VCPKG_DEFAULT_HOST_TRIPLET: x64-windows-static
+        run: |
+          if ! "$VCPKG_ROOT"/vcpkg install \
+            --triplet x64-windows-static \
+            --x-install-root="$VCPKG_ROOT/installed"; then
+            find "$VCPKG_ROOT" -name "*.log" -print -exec cat {} \;
+            exit 1
+          fi
+
+      - name: Build Windows bundle
+        shell: pwsh
+        run: |
+          python3 .\build.py --portable --hwcodec --flutter --vram --skip-portable-pack
+
+      - name: Add TopMost helper
+        uses: actions/download-artifact@v4
+        with:
+          name: topmostwindow-artifacts
+          path: ./flutter/build/windows/x64/runner/Release
+
+      - name: Copy Runner.res
+        shell: bash
+        continue-on-error: true
+        run: |
+          runner_res=$(find . -name "Runner.res" | head -n 1)
+          if [ -n "$runner_res" ]; then
+            cp "$runner_res" ./libs/portable/Runner.res
+          fi
+
+      - name: Build Windows installer
+        shell: pwsh
+        run: |
+          pip3 install -r .\libs\portable\requirements.txt
+          python3 .\libs\portable\generate.py -f .\flutter\build\windows\x64\runner\Release -o .\libs\portable -e .\flutter\build\windows\x64\runner\Release\rustdesk.exe
+          Move-Item -Force .\target\release\rustdesk-portable-packer.exe .\BinguinDesk-install.exe
+
+      - name: Upload Windows package
+        uses: actions/upload-artifact@v4
+        with:
+          name: binguindesk-windows-installer-x64
+          retention-days: 14
+          if-no-files-found: error
+          path: BinguinDesk-install.exe
+
+  build-ubuntu-x64:
+    name: Build Ubuntu x64
+    needs:
+      - generate-bridge
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Restore generated bridge files
+        uses: actions/download-artifact@v4
+        with:
+          name: bridge-artifact
+          path: ./
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y \
+            build-essential \
+            clang \
+            cmake \
+            curl \
+            gcc \
+            git \
+            g++ \
+            libasound2-dev \
+            libayatana-appindicator3-dev \
+            libclang-dev \
+            libgstreamer1.0-dev \
+            libgstreamer-plugins-base1.0-dev \
+            libgtk-3-dev \
+            libunwind-dev \
+            libpam0g-dev \
+            libpulse-dev \
+            libssl-dev \
+            libva-dev \
+            libxcb-randr0-dev \
+            libxcb-shape0-dev \
+            libxcb-xfixes0-dev \
+            libxdo-dev \
+            libxfixes-dev \
+            nasm \
+            ninja-build \
+            pkg-config \
+            python3 \
+            unzip \
+            wget \
+            xz-utils
+
+      - name: Install Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+
+      - name: Patch Flutter SDK
+        shell: bash
+        run: |
+          FLUTTER_ROOT="$(dirname "$(dirname "$(which flutter)")")"
+          pushd "$FLUTTER_ROOT"
+          git apply "$GITHUB_WORKSPACE/.github/patches/flutter_3.24.4_dropdown_menu_enableFilter.diff"
+          popd
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          targets: x86_64-unknown-linux-gnu
+          components: rustfmt
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: full-client-linux
+
+      - name: Setup vcpkg
+        uses: lukka/run-vcpkg@v11
+        with:
+          vcpkgDirectory: ${{ github.workspace }}/.vcpkg
+          vcpkgGitCommitId: ${{ env.VCPKG_COMMIT_ID }}
+          doNotCache: true
+
+      - name: Install vcpkg dependencies
+        shell: bash
+        run: |
+          if ! "$VCPKG_ROOT"/vcpkg install \
+            --triplet x64-linux \
+            --x-install-root="$VCPKG_ROOT/installed"; then
+            find "$VCPKG_ROOT" -name "*.log" -print -exec cat {} \;
+            exit 1
+          fi
+
+      - name: Build Ubuntu bundle
+        run: |
+          python3 ./build.py --flutter --hwcodec --unix-file-copy-paste
+
+      - name: Rename Ubuntu package
+        shell: bash
+        run: |
+          for package in rustdesk-*.deb; do
+            mv "$package" "BinguinDesk-${package#rustdesk-}"
+          done
+
+      - name: Upload Ubuntu package
+        uses: actions/upload-artifact@v4
+        with:
+          name: binguindesk-ubuntu-deb-x64
+          retention-days: 14
+          if-no-files-found: error
+          path: BinguinDesk-*.deb
+
+  build-macos-arm64:
+    name: Build macOS arm64
+    needs:
+      - generate-bridge
+    runs-on: macos-14
+    timeout-minutes: 150
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Restore generated bridge files
+        uses: actions/download-artifact@v4
+        with:
+          name: bridge-artifact
+          path: ./
+
+      - name: Install build runtime
+        run: |
+          brew install llvm create-dmg pkg-config yasm
+          wget https://www.nasm.us/pub/nasm/releasebuilds/2.16.03/macosx/nasm-2.16.03-macosx.zip
+          unzip nasm-2.16.03-macosx.zip
+          sudo cp nasm-2.16.03/nasm /usr/local/bin/nasm
+          nasm --version
+
+      - name: Install Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+
+      - name: Patch Flutter SDK
+        shell: bash
+        run: |
+          FLUTTER_ROOT="$(dirname "$(dirname "$(which flutter)")")"
+          pushd "$FLUTTER_ROOT"
+          git apply "$GITHUB_WORKSPACE/.github/patches/flutter_3.24.4_dropdown_menu_enableFilter.diff"
+          popd
+
+      - name: Workaround for Flutter scheduler issue
+        shell: bash
+        run: |
+          cd "$(dirname "$(which flutter)")"
+          sed -i -e 's/_setFramesEnabledState(false);/\/\/_setFramesEnabledState(false);/g' ../packages/flutter/lib/src/scheduler/binding.dart
+          grep -n '_setFramesEnabledState(false);' ../packages/flutter/lib/src/scheduler/binding.dart
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: ${{ env.MAC_RUST_VERSION }}
+          targets: aarch64-apple-darwin
+          components: rustfmt
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: full-client-macos
+
+      - name: Setup vcpkg
+        uses: lukka/run-vcpkg@v11
+        with:
+          vcpkgGitCommitId: ${{ env.VCPKG_COMMIT_ID }}
+          doNotCache: true
+
+      - name: Install vcpkg dependencies
+        shell: bash
+        run: |
+          if ! "$VCPKG_ROOT"/vcpkg install \
+            --triplet arm64-osx \
+            --x-install-root="$VCPKG_ROOT/installed"; then
+            find "$VCPKG_ROOT" -name "*.log" -print -exec cat {} \;
+            exit 1
+          fi
+
+      - name: Build macOS app
+        shell: bash
+        run: |
+          ./build.py --flutter --hwcodec --unix-file-copy-paste --screencapturekit
+
+      - name: Package DMG
+        shell: bash
+        run: |
+          APP_BUNDLE="$(find ./flutter/build/macos/Build/Products/Release -maxdepth 1 -name "*.app" | head -n 1)"
+          if [ -z "$APP_BUNDLE" ]; then
+            echo "No .app bundle found."
+            exit 1
+          fi
+          APP_NAME="$(basename "$APP_BUNDLE")"
+          create-dmg --icon "$APP_NAME" 200 190 --hide-extension "$APP_NAME" --window-size 800 400 --app-drop-link 600 185 BinguinDesk-macos-arm64.dmg "$APP_BUNDLE"
+
+      - name: Upload macOS package
+        uses: actions/upload-artifact@v4
+        with:
+          name: binguindesk-macos-dmg-arm64
+          retention-days: 14
+          if-no-files-found: error
+          path: BinguinDesk-macos-arm64.dmg
+
+  build-android-arm64:
+    name: Build Android arm64 APK
+    needs:
+      - generate-bridge
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    steps:
+      - name: Free Disk Space (Ubuntu)
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false
+          android: false
+          dotnet: true
+          haskell: true
+          large-packages: false
+          docker-images: true
+          swap-storage: false
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            clang \
+            cmake \
+            curl \
+            gcc-multilib \
+            git \
+            g++ \
+            g++-multilib \
+            libayatana-appindicator3-dev \
+            libasound2-dev \
+            libc6-dev \
+            libclang-dev \
+            libunwind-dev \
+            libgstreamer1.0-dev \
+            libgstreamer-plugins-base1.0-dev \
+            libgtk-3-dev \
+            libpam0g-dev \
+            libpulse-dev \
+            libva-dev \
+            libxcb-randr0-dev \
+            libxcb-shape0-dev \
+            libxcb-xfixes0-dev \
+            libxdo-dev \
+            libxfixes-dev \
+            nasm \
+            ninja-build \
+            openjdk-17-jdk-headless \
+            pkg-config \
+            tree \
+            unzip \
+            wget
+
+      - name: Checkout source code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Restore generated bridge files
+        uses: actions/download-artifact@v4
+        with:
+          name: bridge-artifact
+          path: ./
+
+      - name: Install Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: ${{ env.ANDROID_FLUTTER_VERSION }}
+
+      - name: Patch Flutter SDK
+        shell: bash
+        run: |
+          FLUTTER_ROOT="$(dirname "$(dirname "$(which flutter)")")"
+          pushd "$FLUTTER_ROOT"
+          git apply "$GITHUB_WORKSPACE/.github/patches/flutter_3.24.4_dropdown_menu_enableFilter.diff"
+          popd
+
+      - uses: nttld/setup-ndk@v1
+        id: setup-ndk
+        with:
+          ndk-version: ${{ env.NDK_VERSION }}
+          add-to-path: true
+
+      - name: Setup vcpkg
+        uses: lukka/run-vcpkg@v11
+        with:
+          vcpkgDirectory: ${{ github.workspace }}/.vcpkg
+          vcpkgGitCommitId: ${{ env.VCPKG_COMMIT_ID }}
+          doNotCache: true
+
+      - name: Install vcpkg dependencies
+        shell: bash
+        run: |
+          if ! ./flutter/build_android_deps.sh arm64-v8a; then
+            find "$VCPKG_ROOT" -name "*.log" -print -exec cat {} \;
+            exit 1
+          fi
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          components: rustfmt
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: full-client-android
+          key: aarch64-linux-android
+
+      - name: Build rustdesk android library
+        shell: bash
+        env:
+          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
+          ANDROID_NDK_ROOT: ${{ steps.setup-ndk.outputs.ndk-path }}
+        run: |
+          rustup target add aarch64-linux-android
+          cargo install cargo-ndk --version ${{ env.CARGO_NDK_VERSION }} --locked
+          ./flutter/ndk_arm64.sh
+          mkdir -p ./flutter/android/app/src/main/jniLibs/arm64-v8a
+          cp ./target/aarch64-linux-android/release/liblibrustdesk.so ./flutter/android/app/src/main/jniLibs/arm64-v8a/librustdesk.so
+          cp "${ANDROID_NDK_HOME}"/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so ./flutter/android/app/src/main/jniLibs/arm64-v8a/
+
+      - name: Build Android APK
+        shell: bash
+        env:
+          JAVA_HOME: /usr/lib/jvm/java-17-openjdk-amd64
+        run: |
+          export PATH=/usr/lib/jvm/java-17-openjdk-amd64/bin:$PATH
+          sed -i "s/org.gradle.jvmargs=-Xmx1024M/org.gradle.jvmargs=-Xmx2g/g" ./flutter/android/gradle.properties
+          sed -i "s/signingConfigs.release/signingConfigs.debug/g" ./flutter/android/app/build.gradle
+          pushd flutter
+          flutter build apk --release --target-platform android-arm64 --split-per-abi
+          mv build/app/outputs/flutter-apk/app-arm64-v8a-release.apk ../BinguinDesk-android-arm64.apk
+          popd
+
+      - name: Upload Android package
+        uses: actions/upload-artifact@v4
+        with:
+          name: binguindesk-android-apk-arm64
+          retention-days: 14
+          if-no-files-found: error
+          path: BinguinDesk-android-arm64.apk

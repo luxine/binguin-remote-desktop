@@ -13,6 +13,8 @@
 #include <desktop_multi_window/desktop_multi_window_plugin.h>
 
 #include "flutter/generated_plugin_registrant.h"
+#include <limits.h>
+#include <unistd.h>
 
 struct _MyApplication {
   GtkApplication parent_instance;
@@ -26,6 +28,7 @@ void host_channel_call_handler(FlMethodChannel* channel, FlMethodCall* method_ca
 
 GtkWidget *find_gl_area(GtkWidget *widget);
 void try_set_transparent(GtkWindow* window, GdkScreen* screen, FlView* view);
+GdkPixbuf* load_bundled_window_icon();
 
 extern bool gIsConnectionManager;
 
@@ -38,13 +41,20 @@ static void my_application_activate(GApplication* application) {
   GtkWindow* window =
       GTK_WINDOW(gtk_application_window_new(GTK_APPLICATION(application)));
   gtk_window_set_decorated(window, FALSE);
-  // try setting icon for rustdesk, which uses the system cache
-  GtkIconTheme* theme = gtk_icon_theme_get_default();
-  gint icons[4] = {256, 128, 64, 32};
-  for (int i = 0; i < 4; i++) {
-    GdkPixbuf* icon = gtk_icon_theme_load_icon(theme, "rustdesk", icons[i], GTK_ICON_LOOKUP_NO_SVG, NULL);
-    if (icon != nullptr) {
-      gtk_window_set_icon(window, icon);
+  // Prefer icon from bundled assets to avoid stale system icon cache.
+  GdkPixbuf* bundled_icon = load_bundled_window_icon();
+  if (bundled_icon != nullptr) {
+    gtk_window_set_icon(window, bundled_icon);
+    g_object_unref(bundled_icon);
+  } else {
+    GtkIconTheme* theme = gtk_icon_theme_get_default();
+    gint icons[4] = {256, 128, 64, 32};
+    for (int i = 0; i < 4; i++) {
+      GdkPixbuf* icon = gtk_icon_theme_load_icon(theme, "rustdesk", icons[i], GTK_ICON_LOOKUP_NO_SVG, NULL);
+      if (icon != nullptr) {
+        gtk_window_set_icon(window, icon);
+        g_object_unref(icon);
+      }
     }
   }
   // Use a header bar when running in GNOME as this is the common style used
@@ -259,4 +269,50 @@ void try_set_transparent(GtkWindow* window, GdkScreen* screen, FlView* view)
       gtk_widget_set_visual(GTK_WIDGET(window), visual);
     }
   }
+}
+
+GdkPixbuf* load_bundled_window_icon()
+{
+  char exe_path[PATH_MAX + 1] = {0};
+  ssize_t exe_len = readlink("/proc/self/exe", exe_path, PATH_MAX);
+  if (exe_len <= 0 || exe_len > PATH_MAX) {
+    return NULL;
+  }
+  exe_path[exe_len] = '\0';
+
+  gchar *exe_dir = g_path_get_dirname(exe_path);
+  if (exe_dir == NULL) {
+    return NULL;
+  }
+
+  const gchar* rel_paths[] = {
+    "data/flutter_assets/assets/icon.png",
+    "data/flutter_assets/assets/icon.svg",
+  };
+
+  GdkPixbuf* icon = NULL;
+  for (size_t i = 0; i < sizeof(rel_paths) / sizeof(rel_paths[0]); i++) {
+    gchar* full_path = g_build_filename(exe_dir, rel_paths[i], NULL);
+    if (full_path == NULL) {
+      continue;
+    }
+    if (!g_file_test(full_path, G_FILE_TEST_EXISTS)) {
+      g_free(full_path);
+      continue;
+    }
+
+    GError* error = NULL;
+    icon = gdk_pixbuf_new_from_file_at_scale(full_path, 256, 256, TRUE, &error);
+    if (icon == NULL && error != NULL) {
+      g_warning("Failed to load bundled app icon: %s", error->message);
+      g_clear_error(&error);
+    }
+    g_free(full_path);
+    if (icon != NULL) {
+      break;
+    }
+  }
+
+  g_free(exe_dir);
+  return icon;
 }
