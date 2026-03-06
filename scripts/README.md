@@ -5,7 +5,7 @@
 ## 1. 脚本用途
 
 - `client-install.sh`：安装/重装客户端并写入预设服务器、密钥、无人值守密码等。
-- `client-update.sh`：更新客户端（本质调用 `client-install.sh`）。
+- `client-update.sh`：更新客户端（默认先完整卸载旧包，再调用 `client-install.sh` 安装新包）。
 - `ubuntu24-best-config.sh`：仅做 Ubuntu 24.04 被控端系统级配置（Xorg、自启动、常驻、禁休眠等）。
 - `client-all-in-one.sh`：先安装/更新，再应用 Ubuntu 24.04 最佳配置。
 
@@ -31,8 +31,11 @@ sudo ./scripts/client-install.sh \
   --key 'nLdVM05GRrC0PCzA1uJFTcuKQ6gitptntaokhFEayb0=' \
   --permanent-password 'Binguin1001'
 
-# 4) 更新客户端（参数与 install 一样）
+# 4) 更新客户端（默认先卸载旧包再安装新包）
 sudo ./scripts/client-update.sh --deb-file ./BinguinDesk-1.0.1.deb
+
+# 4.1) 仅安装覆盖，不执行完整卸载
+sudo ./scripts/client-update.sh --no-uninstall --deb-file ./BinguinDesk-1.0.1.deb
 
 # 5) 仅做 Ubuntu 24.04 被控端最佳配置
 sudo ./scripts/ubuntu24-best-config.sh --autologin-user ubuntu
@@ -59,6 +62,9 @@ sudo ./scripts/client-all-in-one.sh \
 - `--no-watchdog`：不安装 watchdog 定时守护。
 - `--no-hardening`：不写入 systemd 加固配置。
 - `--skip-apt-update`：跳过 `apt-get update`。
+- `--no-uninstall`：`client-update.sh` 专用，跳过完整卸载。
+- `--keep-snap-flatpak`：`client-update.sh` 专用，不清理 snap/flatpak 旧包。
+- `--keep-apt-autoremove`：`client-update.sh` 专用，不执行 `apt autoremove`。
 
 默认内置值（如不覆盖）：
 
