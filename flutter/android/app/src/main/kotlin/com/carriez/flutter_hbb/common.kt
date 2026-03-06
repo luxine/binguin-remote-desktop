@@ -151,7 +151,7 @@ fun getScreenSize(windowManager: WindowManager) : Pair<Int, Int>{
     return Pair(w, h)
 }
 
- fun translate(input: String): String {
+fun translate(input: String): String {
     Log.d("common", "translate:$LOCAL_NAME")
-    return FFI.translateLocale(LOCAL_NAME, input)
+    return FFI.translateLocale(LOCAL_NAME, input).replace("RustDesk", "BinguinDesk")
 }

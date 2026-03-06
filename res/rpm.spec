@@ -3,8 +3,8 @@ Version:    1.4.6
 Release:    0
 Summary:    RPM package
 License:    GPL-3.0
-URL:        https://rustdesk.com
-Vendor:     rustdesk <info@rustdesk.com>
+URL:        https://binguinpos.com
+Vendor:     BinguinDesk <support@binguinpos.com>
 Requires:   gtk3 libxcb libXfixes alsa-lib libva2 pam gstreamer1-plugins-base
 Recommends: libayatana-appindicator-gtk3 libxdo
 

@@ -44,16 +44,23 @@ static void my_application_activate(GApplication* application) {
   // Prefer icon from bundled assets to avoid stale system icon cache.
   GdkPixbuf* bundled_icon = load_bundled_window_icon();
   if (bundled_icon != nullptr) {
+    gtk_window_set_default_icon(bundled_icon);
     gtk_window_set_icon(window, bundled_icon);
     g_object_unref(bundled_icon);
   } else {
     GtkIconTheme* theme = gtk_icon_theme_get_default();
     gint icons[4] = {256, 128, 64, 32};
-    for (int i = 0; i < 4; i++) {
-      GdkPixbuf* icon = gtk_icon_theme_load_icon(theme, "rustdesk", icons[i], GTK_ICON_LOOKUP_NO_SVG, NULL);
-      if (icon != nullptr) {
-        gtk_window_set_icon(window, icon);
-        g_object_unref(icon);
+    const gchar* names[] = {"binguindesk", "rustdesk"};
+    for (int n = 0; n < 2; n++) {
+      for (int i = 0; i < 4; i++) {
+        GdkPixbuf* icon =
+            gtk_icon_theme_load_icon(theme, names[n], icons[i], GTK_ICON_LOOKUP_NO_SVG, NULL);
+        if (icon != nullptr) {
+          gtk_window_set_default_icon(icon);
+          gtk_window_set_icon(window, icon);
+          g_object_unref(icon);
+          break;
+        }
       }
     }
   }
@@ -288,6 +295,10 @@ GdkPixbuf* load_bundled_window_icon()
   const gchar* rel_paths[] = {
     "data/flutter_assets/assets/icon.png",
     "data/flutter_assets/assets/icon.svg",
+    "../icons/hicolor/256x256/apps/binguindesk.png",
+    "../icons/hicolor/256x256/apps/rustdesk.png",
+    "../pixmaps/binguindesk.png",
+    "../pixmaps/rustdesk.png",
   };
 
   GdkPixbuf* icon = NULL;
