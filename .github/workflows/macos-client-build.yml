@@ -1,0 +1,115 @@
+name: MacOS Client Build
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  MAC_RUST_VERSION: "1.81"
+  FLUTTER_VERSION: "3.24.5"
+  VCPKG_COMMIT_ID: "120deac3062162151622ca4860575a33844ba10b"
+
+jobs:
+  generate-bridge:
+    uses: ./.github/workflows/bridge.yml
+
+  build-macos-arm64:
+    name: Build macOS arm64
+    needs:
+      - generate-bridge
+    runs-on: macos-14
+    timeout-minutes: 150
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Restore generated bridge files
+        uses: actions/download-artifact@v4
+        with:
+          name: bridge-artifact
+          path: ./
+
+      - name: Install build runtime
+        run: |
+          brew install llvm create-dmg pkg-config yasm
+          wget https://www.nasm.us/pub/nasm/releasebuilds/2.16.03/macosx/nasm-2.16.03-macosx.zip
+          unzip nasm-2.16.03-macosx.zip
+          sudo cp nasm-2.16.03/nasm /usr/local/bin/nasm
+          nasm --version
+
+      - name: Install Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+
+      - name: Patch Flutter SDK
+        shell: bash
+        run: |
+          FLUTTER_ROOT="$(dirname "$(dirname "$(which flutter)")")"
+          pushd "$FLUTTER_ROOT"
+          git apply "$GITHUB_WORKSPACE/.github/patches/flutter_3.24.4_dropdown_menu_enableFilter.diff"
+          popd
+
+      - name: Workaround for Flutter scheduler issue
+        shell: bash
+        run: |
+          cd "$(dirname "$(which flutter)")"
+          sed -i -e 's/_setFramesEnabledState(false);/\/\/_setFramesEnabledState(false);/g' ../packages/flutter/lib/src/scheduler/binding.dart
+          grep -n '_setFramesEnabledState(false);' ../packages/flutter/lib/src/scheduler/binding.dart
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: ${{ env.MAC_RUST_VERSION }}
+          targets: aarch64-apple-darwin
+          components: rustfmt
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: macos-client-only
+
+      - name: Setup vcpkg
+        uses: lukka/run-vcpkg@v11
+        with:
+          vcpkgGitCommitId: ${{ env.VCPKG_COMMIT_ID }}
+          doNotCache: true
+
+      - name: Install vcpkg dependencies
+        shell: bash
+        run: |
+          if ! "$VCPKG_ROOT"/vcpkg install \
+            --triplet arm64-osx \
+            --x-install-root="$VCPKG_ROOT/installed"; then
+            find "$VCPKG_ROOT" -name "*.log" -print -exec cat {} \;
+            exit 1
+          fi
+
+      - name: Build macOS app
+        shell: bash
+        run: |
+          ./build.py --flutter --hwcodec --unix-file-copy-paste --screencapturekit
+
+      - name: Package DMG
+        shell: bash
+        run: |
+          APP_BUNDLE="$(find ./flutter/build/macos/Build/Products/Release -maxdepth 1 -name "*.app" | head -n 1)"
+          if [ -z "$APP_BUNDLE" ]; then
+            echo "No .app bundle found."
+            exit 1
+          fi
+          APP_NAME="$(basename "$APP_BUNDLE")"
+          create-dmg --icon "$APP_NAME" 200 190 --hide-extension "$APP_NAME" --window-size 800 400 --app-drop-link 600 185 BinguinDesk-macos-arm64.dmg "$APP_BUNDLE"
+
+      - name: Upload macOS package
+        uses: actions/upload-artifact@v4
+        with:
+          name: binguindesk-macos-dmg-arm64
+          retention-days: 14
+          if-no-files-found: error
+          path: BinguinDesk-macos-arm64.dmg
